@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+option go_package = "gen/pubsubpb";
+
 import "google/protobuf/empty.proto";
 
 service PubSub {

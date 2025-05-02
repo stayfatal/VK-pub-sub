@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
-	"github.com/pkg/errors"
 )
 
 type MessageHandler func(msg interface{})
@@ -70,7 +69,7 @@ func (sp *pubSub) Publish(subject string, msg interface{}) error {
 	defer sp.mu.RUnlock()
 	channels, ok := sp.subjects[subject]
 	if !ok {
-		return errors.Errorf("topics didn't have subject: %s", subject)
+		return ErrNonExistentSubject
 	}
 
 	// broadcast
