@@ -6,8 +6,9 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 
-	"github.com/joho/godotenv"
+	"github.com/stayfatal/VK-pub-sub/config"
 	"github.com/stayfatal/VK-pub-sub/gen/pubsubpb"
 	server "github.com/stayfatal/VK-pub-sub/internal/grpc"
 	"github.com/stayfatal/VK-pub-sub/internal/service"
@@ -18,27 +19,21 @@ import (
 )
 
 func main() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("cant load env file")
-	}
-
-	port := os.Getenv("PORT")
-
-	logLevel, err := zap.ParseAtomicLevel(os.Getenv("LOG_LEVEL"))
-	if err != nil {
-		log.Println("cant parse log level variable in config setting to info level")
-	}
-
-	logger, err := logger.NewLogger(logLevel)
+	config, err := config.Load(".env")
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	logger, err := logger.NewLogger(config.Logger.Level)
+	if err != nil {
+		log.Fatal(err)
+		return
 	}
 
 	pubsub := pubsub.NewPubSub()
 	defer pubsub.Close(context.Background())
 
-	svc := service.NewService(logger, pubsub)
+	svc := service.NewService(pubsub)
 
 	srv := server.NewPubSubServer(svc, logger)
 
@@ -47,12 +42,27 @@ func main() {
 
 	pubsubpb.RegisterPubSubServer(grpcSrv, srv)
 
-	l, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
+	l, err := net.Listen("tcp", fmt.Sprintf(":%s", config.Server.Port))
 	if err != nil {
-		logger.Fatal("error while starting server", zap.String("error", err.Error()))
+		logger.Error(err)
+		return
 	}
+	defer l.Close()
 
-	if err := grpcSrv.Serve(l); err != nil {
-		logger.Fatal("error while serving grpc", zap.String("error", err.Error()))
+	srvErr := make(chan error)
+	go func() {
+		logger.Info("server is listening", zap.String("port", config.Server.Port))
+		if err := grpcSrv.Serve(l); err != nil {
+			srvErr <- err
+		}
+	}()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	select {
+	case sig := <-c:
+		logger.Info("Server stopped", zap.String("signal", sig.String()))
+	case <-srvErr:
+		logger.Error(err)
 	}
 }

@@ -5,51 +5,63 @@ import (
 
 	"github.com/stayfatal/VK-pub-sub/domain"
 	"github.com/stayfatal/VK-pub-sub/gen/pubsubpb"
-	"github.com/stayfatal/VK-pub-sub/pkg/myerrors"
-	"go.uber.org/zap"
+	"github.com/stayfatal/VK-pub-sub/pkg/logger"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type Handlers struct {
 	svc    Service
-	logger *zap.Logger
+	logger *logger.Logger
 }
 
 func (h *Handlers) publishHandler(ctx context.Context, req any) (any, error) {
 	request, ok := req.(*pubsubpb.PublishRequest)
 	if !ok {
-		return nil, myerrors.New(domain.AssertionErr, zap.ErrorLevel)
+		h.logger.Error(domain.AssertionErr)
+		return nil, status.Error(codes.Internal, domain.AssertionErr.Error())
 	}
-	return nil, h.svc.Publish(ctx, request.Key, request.Data)
+
+	err := h.svc.Publish(ctx, request.Key, request.Data)
+	if err != nil {
+		h.logger.Error(err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return nil, nil
 }
 
 func (h *Handlers) subscribeHandler(req any, st grpc.ServerStream) error {
 	request, ok := req.(*pubsubpb.SubscribeRequest)
 	if !ok {
-		return myerrors.New(domain.AssertionErr, zap.ErrorLevel)
+		h.logger.Error(domain.AssertionErr)
+		return status.Error(codes.Internal, domain.AssertionErr.Error())
 	}
 	ch, sub, err := h.svc.Subscribe(request.Key)
 	if err != nil {
-		return err
+		h.logger.Error(err)
+		return status.Error(codes.Internal, err.Error())
 	}
 
 	stream, ok := st.(pubsubpb.PubSub_SubscribeServer)
 	if !ok {
-		return myerrors.New(domain.AssertionErr, zap.ErrorLevel)
+		h.logger.Error(domain.AssertionErr)
+		return status.Error(codes.Internal, domain.AssertionErr.Error())
 	}
 
 	for {
 		select {
 		case <-stream.Context().Done():
 			sub.Unsubscribe()
-			return myerrors.New(stream.Context().Err(), zap.InfoLevel)
+			return status.Error(codes.Canceled, stream.Context().Err().Error())
 		case msg, ok := <-ch:
 			if !ok {
 				return nil
 			}
 			data, ok := msg.(string)
 			if !ok {
-				h.logger.Error("error while handling message", zap.String("error", domain.AssertionErr.Error()))
+				h.logger.Error(domain.AssertionErr)
 				continue
 			}
 
@@ -57,7 +69,7 @@ func (h *Handlers) subscribeHandler(req any, st grpc.ServerStream) error {
 				Data: data,
 			})
 			if err != nil {
-				h.logger.Error("error while sending message", zap.String("error", err.Error()))
+				h.logger.Error(err)
 				continue
 			}
 		}

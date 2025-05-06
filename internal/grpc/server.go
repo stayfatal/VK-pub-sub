@@ -5,8 +5,8 @@ import (
 
 	"github.com/stayfatal/VK-pub-sub/gen/pubsubpb"
 	"github.com/stayfatal/VK-pub-sub/internal/grpc/middlewares"
+	"github.com/stayfatal/VK-pub-sub/pkg/logger"
 	"github.com/stayfatal/VK-pub-sub/pkg/pubsub"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -19,23 +19,23 @@ type Service interface {
 type Server struct {
 	pubsubpb.UnimplementedPubSubServer
 
-	PublishHandler   grpc.UnaryHandler
-	SubscribeHandler grpc.StreamHandler
+	publishHandler   grpc.UnaryHandler
+	subscribeHandler grpc.StreamHandler
 }
 
-func NewPubSubServer(svc Service, logger *zap.Logger) *Server {
+func NewPubSubServer(svc Service, logger *logger.Logger) *Server {
 	handlersManager := Handlers{
 		svc:    svc,
 		logger: logger,
 	}
 
 	return &Server{
-		PublishHandler: middlewares.BuildUnaryChain(
+		publishHandler: middlewares.BuildUnaryChain(
 			logger,
 			handlersManager.publishHandler,
 			middlewares.UnaryRecoverer, middlewares.UnaryLogger,
 		),
-		SubscribeHandler: middlewares.BuildStreamChain(
+		subscribeHandler: middlewares.BuildStreamChain(
 			logger,
 			handlersManager.subscribeHandler,
 			middlewares.StreamRecoverer, middlewares.StreamLogger,
@@ -44,10 +44,10 @@ func NewPubSubServer(svc Service, logger *zap.Logger) *Server {
 }
 
 func (s *Server) Publish(ctx context.Context, req *pubsubpb.PublishRequest) (*emptypb.Empty, error) {
-	_, err := s.PublishHandler(ctx, req)
+	_, err := s.publishHandler(ctx, req)
 	return &emptypb.Empty{}, err
 }
 
 func (s *Server) Subscribe(req *pubsubpb.SubscribeRequest, stream pubsubpb.PubSub_SubscribeServer) error {
-	return s.SubscribeHandler(req, stream)
+	return s.subscribeHandler(req, stream)
 }
