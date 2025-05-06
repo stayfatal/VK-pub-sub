@@ -25,7 +25,7 @@ type PubSub interface {
 type pubSub struct {
 	// {key - subject value - map {key - sub_uuid value chan}}
 	subjects map[string]map[string]chan interface{}
-	// true if Close was called
+	// флаг поднят когда был вызван Close()
 	closed *atomic.Bool
 	mu     *sync.RWMutex
 	wg     *sync.WaitGroup
@@ -40,7 +40,13 @@ func NewPubSub() PubSub {
 	}
 }
 
+// MessageHandler будет запущен асинхронно
+// Чтобы избежать утечки горутин контролируйте выполнение MessageHandler
 func (sp *pubSub) Subscribe(subject string, cb MessageHandler) (Subscription, error) {
+	if sp.closed.Load() {
+		return nil, ErrClosed
+	}
+
 	sp.mu.Lock()
 	if _, ok := sp.subjects[subject]; !ok {
 		sp.subjects[subject] = make(map[string]chan interface{}, 0)
@@ -57,7 +63,7 @@ func (sp *pubSub) Subscribe(subject string, cb MessageHandler) (Subscription, er
 			if !ok {
 				return
 			}
-			go cb(mes) // for situations when mesHandler is slow
+			go cb(mes) // запускаем асинхронно чтобы не ждать выполнения долгой обработки
 		}
 	}()
 
@@ -65,14 +71,19 @@ func (sp *pubSub) Subscribe(subject string, cb MessageHandler) (Subscription, er
 }
 
 func (sp *pubSub) Publish(subject string, msg interface{}) error {
+	if sp.closed.Load() {
+		return ErrClosed
+	}
+
+	// мьютекс повешен на всю функцию для того чтобы не дать другим частям кода закрыть канал во время записи туда
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
 	channels, ok := sp.subjects[subject]
-	if !ok {
-		return ErrNonExistentSubject
+	if !ok || len(channels) == 0 {
+		return nil
 	}
 
-	// broadcast
+	// рассылка всем сабам
 	for _, ch := range channels {
 		ch <- msg
 	}
@@ -82,7 +93,7 @@ func (sp *pubSub) Publish(subject string, msg interface{}) error {
 
 func (sp *pubSub) Close(ctx context.Context) error {
 	sp.closed.Swap(true)
-	// close and delete cant be separated cuz then publish will write to close channel
+	// лочим целый блок потому что нельзя разделить закрытие канала и его удаление из мапы
 	sp.mu.Lock()
 	for _, subs := range sp.subjects {
 		for _, ch := range subs {
@@ -106,9 +117,10 @@ func (sp *pubSub) Close(ctx context.Context) error {
 }
 
 type subscription struct {
-	uuid    string
-	subject string
-	pubSub  *pubSub
+	uuid     string
+	subject  string
+	pubSub   *pubSub
+	unsubbed *atomic.Bool
 }
 
 func newSubscription(subject string, pubSub *pubSub) (Subscription, chan interface{}) {
@@ -119,18 +131,21 @@ func newSubscription(subject string, pubSub *pubSub) (Subscription, chan interfa
 	pubSub.mu.Unlock()
 
 	return &subscription{
-		uuid:    uuid,
-		subject: subject,
-		pubSub:  pubSub,
+		uuid:     uuid,
+		subject:  subject,
+		pubSub:   pubSub,
+		unsubbed: &atomic.Bool{},
 	}, ch
 }
 
 func (s *subscription) Unsubscribe() {
-	if !s.pubSub.closed.Load() {
-		// close and delete cant be separated cuz then publish will write to close channel
-		s.pubSub.mu.Lock()
-		close(s.pubSub.subjects[s.subject][s.uuid])
-		delete(s.pubSub.subjects[s.subject], s.uuid)
-		s.pubSub.mu.Unlock()
+	if s.pubSub.closed.Load() || s.unsubbed.Load() {
+		return
 	}
+	s.unsubbed.Swap(true)
+	// лочим целый блок потому что нельзя разделить закрытие канала и его удаление из мапы
+	s.pubSub.mu.Lock()
+	close(s.pubSub.subjects[s.subject][s.uuid])
+	delete(s.pubSub.subjects[s.subject], s.uuid)
+	s.pubSub.mu.Unlock()
 }

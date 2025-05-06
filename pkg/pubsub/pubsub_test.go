@@ -9,9 +9,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestPublishWithCreatedTopic(t *testing.T) {
+func TestPublish(t *testing.T) {
 	var (
 		counter    int32
 		subsAmount = 5
@@ -41,19 +42,19 @@ func TestPublishWithCreatedTopic(t *testing.T) {
 	}
 	err := sp.Publish(subject, "some message")
 	wg.Wait()
-	assert.Nil(t, err)
-	assert.Nil(t, ctx.Err())
+	require.NoError(t, err)
+	require.NoError(t, ctx.Err())
 	assert.Equal(t, int32(subsAmount), counter)
 }
 
-func TestPublishWithNotCreatedTopic(t *testing.T) {
+func TestPublishWithZeroSubs(t *testing.T) {
 	var (
 		subject = "test subject"
 		sp      = NewPubSub().(*pubSub)
 	)
 
 	err := sp.Publish(subject, "some message")
-	assert.NotNil(t, err)
+	require.NoError(t, err)
 }
 
 func TestSubscribe(t *testing.T) {
@@ -76,7 +77,7 @@ func TestSubscribe(t *testing.T) {
 				assert.Equal(t, testMsg, msg)
 			},
 		)
-		assert.Nil(t, err)
+		require.NoError(t, err)
 	}
 
 	for _, ch := range sp.subjects[subject] {
@@ -98,7 +99,7 @@ func TestUnsubscribe(t *testing.T) {
 			subject,
 			func(msg interface{}) {},
 		)
-		assert.Nil(t, err)
+		require.NoError(t, err)
 		subscription.Unsubscribe()
 	}
 
@@ -120,7 +121,7 @@ func TestCloseWithoutContext(t *testing.T) {
 	}
 
 	err := sp.Close(context.Background())
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	for _, ch := range sp.subjects[subject] {
 		_, ok := <-ch
@@ -142,7 +143,7 @@ func TestCloseWithContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := sp.Close(ctx)
-	assert.NotNil(t, err)
+	require.Error(t, err)
 }
 
 func TestUnsubscribeAfterClose(t *testing.T) {
@@ -155,16 +156,45 @@ func TestUnsubscribeAfterClose(t *testing.T) {
 	subs := []Subscription{}
 	for i := 0; i < subsAmount; i++ {
 		sub, err := sp.Subscribe(subject, func(msg interface{}) {})
-		assert.Nil(t, err)
+		require.NoError(t, err)
 		subs = append(subs, sub)
 	}
 
 	err := sp.Close(context.Background())
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
 	for _, sub := range subs {
 		sub.Unsubscribe()
 	}
+}
+
+func TestMultipleUnsubscribe(t *testing.T) {
+	var (
+		subject = "test subject"
+		sp      = NewPubSub().(*pubSub)
+	)
+
+	sub, err := sp.Subscribe(subject, func(msg interface{}) {})
+	require.NoError(t, err)
+
+	sub.Unsubscribe()
+	sub.Unsubscribe()
+
+	err = sp.Close(context.Background())
+	require.NoError(t, err)
+}
+
+func TestSubscribeAfterClose(t *testing.T) {
+	var (
+		subject = "test subject"
+		sp      = NewPubSub().(*pubSub)
+	)
+
+	err := sp.Close(context.Background())
+	require.NoError(t, err)
+
+	_, err = sp.Subscribe(subject, func(msg interface{}) {})
+	require.Error(t, err)
 }
 
 func TestPublishAfterClose(t *testing.T) {
@@ -180,9 +210,10 @@ func TestPublishAfterClose(t *testing.T) {
 	}
 
 	err := sp.Close(context.Background())
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
-	sp.Publish(subject, "some mes")
+	err = sp.Publish(subject, "some mes")
+	require.Error(t, err)
 }
 
 func TestConcurrencyPublishWhileClosing(t *testing.T) {
@@ -194,7 +225,7 @@ func TestConcurrencyPublishWhileClosing(t *testing.T) {
 
 	for i := 0; i < subsAmount; i++ {
 		_, err := sp.Subscribe(subject, func(msg interface{}) {})
-		assert.Nil(t, err)
+		require.NoError(t, err)
 	}
 
 	stop := make(chan struct{})
@@ -210,7 +241,7 @@ func TestConcurrencyPublishWhileClosing(t *testing.T) {
 	}()
 
 	err := sp.Close(context.Background())
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	stop <- struct{}{}
 }
 
@@ -228,5 +259,5 @@ func TestRace(t *testing.T) {
 	}
 	wg.Wait()
 	err := sp.Close(context.Background())
-	assert.Nil(t, err)
+	require.NoError(t, err)
 }
